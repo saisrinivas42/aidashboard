@@ -1,0 +1,5 @@
+{
+  "name": "InsightSQL: Business Intelligence Assistant",
+  "description": "Convert natural language questions into SQL queries and interactive dashboard visualizations for BMW car sales data using Gemini.",
+  "requestFramePermissions": []
+}
