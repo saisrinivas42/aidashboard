@@ -2,6 +2,10 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
+import dotenv from "dotenv";
+
+// Load environment variables from .env file
+dotenv.config();
 
 async function startServer() {
   const app = express();
@@ -194,6 +198,128 @@ async function startServer() {
     ('X1', 2016, 13700, 'Manual', 52226, 'Diesel', 20, 68.9, 2.0),
     ('3 Series', 2017, 16900, 'Automatic', 12330, 'Diesel', 30, 64.2, 2.0)
   `);
+
+  // API Endpoint to get database schema
+  app.get("/api/schema", (req, res) => {
+    try {
+      const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='cars'").get();
+      const sampleData = db.prepare("SELECT * FROM cars LIMIT 3").all();
+      res.json({ schema, sampleData });
+    } catch (error: any) {
+      console.error("Schema Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // API Endpoint to call Groq AI
+  app.post("/api/groq", async (req, res) => {
+    const { question } = req.body;
+    if (!question) {
+      return res.status(400).json({ error: "Question is required" });
+    }
+
+    const SYSTEM_INSTRUCTION = `
+You are an AI assistant that converts natural language business questions into SQL queries and dashboard chart suggestions.
+The database is SQLite with CASE-SENSITIVE column names.
+
+Database Schema:
+Table: cars
+Columns (use EXACTLY these names):
+- id (INTEGER PRIMARY KEY)
+- model (VARCHAR) - car model name
+- year (INTEGER) - manufacturing year
+- price (INTEGER) - price in currency units
+- transmission (VARCHAR) - transmission type (Automatic, Manual, Semi-Auto)
+- mileage (INTEGER) - mileage in miles/km
+- fuelType (VARCHAR) - fuel type (Diesel, Petrol, Other)
+- tax (INTEGER) - tax amount
+- mpg (REAL) - miles per gallon
+- engineSize (REAL) - engine size in liters
+
+CRITICAL RULES:
+1. Use EXACT column names as shown above (case-sensitive)
+2. Always use aliases in SELECT that match x_axis and y_axis
+3. For aggregations, always use proper SQL functions (AVG, SUM, COUNT, etc.)
+4. Test your SQL mentally before responding
+
+Example Queries:
+- "Average price of all cars" → SELECT AVG(price) AS average_price FROM cars
+- "Count by fuel type" → SELECT fuelType AS fuel_type, COUNT(*) AS count FROM cars GROUP BY fuelType
+- "Price by year" → SELECT year, AVG(price) AS average_price FROM cars GROUP BY year ORDER BY year
+
+Instructions:
+1. Read the user's question carefully
+2. Generate a correct SQL query using EXACT column names
+3. Suggest the best chart type for visualization
+4. IMPORTANT: Aliases in SQL MUST match x_axis and y_axis names
+
+Chart Selection Rules:
+* Single number (e.g., "What is the average price?") → use "metric"
+* Time/year/trend → use "line_chart"
+* Comparing categories (model, transmission, fuelType) → use "bar_chart"
+* Distribution/breakdown/share → use "pie_chart"
+
+Response Format (JSON only):
+{
+  "sql_query": "SELECT column AS alias FROM cars ...",
+  "chart_type": "bar_chart / line_chart / pie_chart / metric",
+  "x_axis": "alias_for_x",
+  "y_axis": "alias_for_y"
+}
+
+If the question cannot be answered:
+{
+  "error": "Data not available for this query"
+}
+`;
+
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+        },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "system",
+              content: SYSTEM_INSTRUCTION
+            },
+            {
+              role: "user",
+              content: question
+            }
+          ],
+          model: "llama-3.3-70b-versatile",
+          stream: false,
+          temperature: 0,
+          response_format: { type: "json_object" }
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Groq API error:', errorText);
+        return res.status(response.status).json({ error: `Groq API error: ${response.statusText}` });
+      }
+
+      const groqData = await response.json();
+      const content = groqData.choices[0]?.message?.content;
+      
+      if (!content) {
+        return res.status(500).json({ error: 'No response from Groq API' });
+      }
+
+      // Parse JSON from response
+      const parsedData = JSON.parse(content);
+      console.log('Generated SQL:', parsedData.sql_query);
+      res.json(parsedData);
+    } catch (error: any) {
+      console.error("Groq API Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
 
   // API Endpoint to execute SQL
   app.post("/api/execute-sql", (req, res) => {

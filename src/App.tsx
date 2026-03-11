@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { GoogleGenAI, Type } from "@google/genai";
+import React, { useState } from 'react';
+import { HeroSection } from "@/components/ui/hero-section-with-smooth-bg-shader";
 import { 
   BarChart as ReBarChart, 
   Bar, 
@@ -106,13 +106,28 @@ If the question cannot be answered using the data, return:
 `;
 
 export default function App() {
+  const [showDashboard, setShowDashboard] = useState(false);
   const [question, setQuestion] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'chart' | 'table'>('chart');
 
-  const ai = useMemo(() => new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' }), []);
+  // Show hero section first
+  if (!showDashboard) {
+    return (
+      <HeroSection
+        title="Natural Language Queries for"
+        highlightText="InsightSQL"
+        description="Ask questions about your data in plain English. Get instant visualizations and insights powered by AI."
+        buttonText="Enter Dashboard"
+        onButtonClick={() => setShowDashboard(true)}
+        colors={["#4F46E5", "#06B6D4", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"]}
+        distortion={1.2}
+        speed={0.6}
+      />
+    );
+  }
 
   const handleQuery = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -123,27 +138,19 @@ export default function App() {
     setResult(null);
 
     try {
-      // 1. Call Gemini to get SQL and Chart Config
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: question,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              sql_query: { type: Type.STRING },
-              chart_type: { type: Type.STRING, enum: ["bar_chart", "line_chart", "pie_chart", "metric"] },
-              x_axis: { type: Type.STRING },
-              y_axis: { type: Type.STRING },
-              error: { type: Type.STRING }
-            }
-          }
-        },
+      // 1. Call Groq API to get SQL and Chart Config
+      const response = await fetch('/api/groq', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question }),
       });
 
-      const geminiData = JSON.parse(response.text) as GeminiResponse;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `API error: ${response.statusText}`);
+      }
+
+      const geminiData = await response.json() as GeminiResponse;
 
       if (geminiData.error) {
         setError(geminiData.error);
